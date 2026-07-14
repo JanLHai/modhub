@@ -1,9 +1,13 @@
+mod games;
+
 use std::io::{self, Write};
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Help,
     List,
+    Games,
+    SavedGames,
     Add(String),
     Remove(String),
     Quit,
@@ -43,6 +47,8 @@ fn parse_command(input: &str) -> Command {
     match command.as_str() {
         "help" | "h" => Command::Help,
         "list" | "ls" => Command::List,
+        "games" | "game" | "scan" | "find-games" => Command::Games,
+        "saved" | "saved-games" | "katalog" => Command::SavedGames,
         "add" => Command::Add(argument),
         "remove" | "rm" => Command::Remove(argument),
         "quit" | "exit" | "q" => Command::Quit,
@@ -52,6 +58,8 @@ fn parse_command(input: &str) -> Command {
 
 fn print_help() {
     println!("Befehle:");
+    println!("  games                Installierte Spiele und Pfade suchen");
+    println!("  saved                Zuletzt gespeicherten Spielekatalog anzeigen");
     println!("  list                 Installierte Mods anzeigen");
     println!("  add <name>           Einen Mod hinzufügen");
     println!("  remove <name>        Einen Mod entfernen");
@@ -59,9 +67,70 @@ fn print_help() {
     println!("  quit                 Anwendung beenden");
 }
 
+fn print_installed_games() {
+    println!("Suche installierte Spiele ...");
+    let result = games::scan_installed_games();
+
+    let storage_path = games::saved_games_path();
+    match games::save_games(&storage_path, &result.games) {
+        Ok(()) => println!("Katalog aktualisiert: {}", storage_path.display()),
+        Err(error) => println!("Warnung: Spiele konnten nicht gespeichert werden: {error}"),
+    }
+
+    if result.games.is_empty() {
+        println!("Keine installierten Spiele gefunden.");
+    } else {
+        println!("Gefundene Spiele ({}):", result.games.len());
+        for (index, game) in result.games.iter().enumerate() {
+            println!(
+                "  {}. {}\n     Pfad: {}\n     Quelle: {}",
+                index + 1,
+                game.name,
+                game.path.display(),
+                game.source
+            );
+        }
+    }
+
+    for warning in result.warnings {
+        println!("Hinweis: {warning}");
+    }
+}
+
+fn print_saved_games() {
+    let storage_path = games::saved_games_path();
+    match games::load_saved_games(&storage_path) {
+        Ok(games) if games.is_empty() => {
+            println!("Der gespeicherte Spielekatalog ist leer.");
+        }
+        Ok(games) => {
+            println!(
+                "Gespeicherte Spiele ({}), Datei: {}",
+                games.len(),
+                storage_path.display()
+            );
+            for (index, game) in games.iter().enumerate() {
+                println!(
+                    "  {}. {}\n     Pfad: {}\n     Quelle: {}",
+                    index + 1,
+                    game.name,
+                    game.path.display(),
+                    game.source
+                );
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            println!("Noch kein Spielekatalog vorhanden. Starte zuerst `games`.");
+        }
+        Err(error) => println!("Gespeicherter Spielekatalog konnte nicht gelesen werden: {error}"),
+    }
+}
+
 fn handle_command(hub: &mut ModHub, command: Command) -> bool {
     match command {
         Command::Help => print_help(),
+        Command::Games => print_installed_games(),
+        Command::SavedGames => print_saved_games(),
         Command::List => {
             if hub.mods.is_empty() {
                 println!("Noch keine Mods eingetragen.");
@@ -107,7 +176,9 @@ fn handle_command(hub: &mut ModHub, command: Command) -> bool {
 fn run() -> io::Result<()> {
     let mut hub = ModHub::default();
 
-    println!("ModHub – einfache Mod-Verwaltung");
+    println!("ModHub – Mod-Verwaltung und Spiele-Erkennung");
+    println!("`games` sucht installierte Spiele und deren Pfade.");
+    println!("`saved` zeigt den zuletzt gespeicherten Spielekatalog.");
     println!("`help` zeigt die verfügbaren Befehle.");
 
     loop {
@@ -129,6 +200,20 @@ fn run() -> io::Result<()> {
 }
 
 fn main() -> io::Result<()> {
+    if let Some(argument) = std::env::args().nth(1) {
+        match argument.as_str() {
+            "--scan" | "--games" | "scan" | "games" => {
+                print_installed_games();
+                return Ok(());
+            }
+            "--saved" | "--list-saved" | "saved" | "saved-games" => {
+                print_saved_games();
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
     run()
 }
 
@@ -142,6 +227,9 @@ mod tests {
             parse_command("add cool mod"),
             Command::Add("cool mod".into())
         );
+        assert_eq!(parse_command("games"), Command::Games);
+        assert_eq!(parse_command("find-games"), Command::Games);
+        assert_eq!(parse_command("saved"), Command::SavedGames);
         assert_eq!(
             parse_command("RM cool mod"),
             Command::Remove("cool mod".into())
